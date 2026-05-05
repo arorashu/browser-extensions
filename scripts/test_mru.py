@@ -118,6 +118,69 @@ async def main(headless: bool, executable_path: str | None = None):
         # tab indices shift left after close; surviving pages are at indices 0..3
         results.append(("survives tab close (some tab is active)", after4 is not None))
 
+        # ---- Picker tests ----
+        print("\n[picker] reseating activation order for picker test")
+        # Re-seat: page0, page2, page3, page4 are still around (page1 closed). Activate to known order.
+        # New order: 0, 2, 3, 4 -> stack [4,3,2,0], current = page4 (now at index 3 in tabstrip)
+        survivors = [pages[0], pages[2], pages[3], pages[4]]
+        for p in survivors:
+            await p.bring_to_front()
+            await asyncio.sleep(0.3)
+
+        print("[picker] opening picker via openOrAdvancePicker()")
+        await sw.evaluate("globalThis.openOrAdvancePicker()")
+        # Wait for picker page to appear in the context
+        picker = None
+        for _ in range(40):
+            for pg in ctx.pages:
+                if pg.url.endswith("/picker.html"):
+                    picker = pg
+                    break
+            if picker:
+                break
+            await asyncio.sleep(0.1)
+        if not picker:
+            results.append(("picker window opens", False))
+        else:
+            results.append(("picker window opens", True))
+            await picker.wait_for_function("globalThis.__pickerState && globalThis.__pickerState().tabs.length > 0", timeout=3000)
+            state1 = await picker.evaluate("globalThis.__pickerState()")
+            print(f"[picker] state on open: highlight={state1['highlight']}, tabs={[t['title'] for t in state1['tabs']]}")
+            # First tab in picker should be the previously-active tab (survivors[-2] = page3)
+            results.append(("picker first row is most-recent-other-tab", state1["tabs"][0]["title"].endswith("Tab 4") or "Tab 4" in state1["tabs"][0]["title"]))
+            results.append(("picker starts with highlight=0", state1["highlight"] == 0))
+
+            # Advance twice via SW (simulating two more shortcut presses)
+            await sw.evaluate("globalThis.openOrAdvancePicker()")
+            await asyncio.sleep(0.2)
+            await sw.evaluate("globalThis.openOrAdvancePicker()")
+            await asyncio.sleep(0.3)
+            state2 = await picker.evaluate("globalThis.__pickerState()")
+            print(f"[picker] state after 2 advances: highlight={state2['highlight']}")
+            results.append(("picker advances on subsequent shortcut presses", state2["highlight"] == 2))
+
+            # Commit by clicking the active row
+            target_title = state2["tabs"][state2["highlight"]]["title"]
+            print(f"[picker] committing to: {target_title}")
+            await picker.click(".item.active")
+            await asyncio.sleep(0.5)
+            # Picker window should be gone
+            picker_gone = picker.url.endswith("/picker.html") and picker.is_closed() if hasattr(picker, "is_closed") else not any(pg.url.endswith("/picker.html") for pg in ctx.pages)
+            try:
+                still_open = any(pg.url.endswith("/picker.html") for pg in ctx.pages)
+            except Exception:
+                still_open = False
+            results.append(("picker closes after commit", not still_open))
+
+            # The committed tab should now be active
+            active_after_commit = await active_index(sw)
+            print(f"[picker] active tab index after commit: {active_after_commit}")
+            # We committed the 3rd item in the picker (highlight=2), which corresponds to
+            # the 3rd-most-recent normal-window tab. With survivors activated in order
+            # 0, 2, 3, 4 the picker list is [Tab 4, Tab 3, Tab 1] -> highlight 2 = Tab 1
+            # = pages[0], which sits at tabstrip index 0 in the main window.
+            results.append(("commit activates the chosen tab (idx 0)", active_after_commit == 0))
+
         await ctx.close()
 
     print()

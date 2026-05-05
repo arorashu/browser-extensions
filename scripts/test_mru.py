@@ -181,6 +181,79 @@ async def main(headless: bool, executable_path: str | None = None):
             # = pages[0], which sits at tabstrip index 0 in the main window.
             results.append(("commit activates the chosen tab (idx 0)", active_after_commit == 0))
 
+        # ---- Multi-window scoping test ----
+        # Build a fresh state with two normal windows, mixed activation.
+        print("\n[multi-window] tearing down and rebuilding with two windows")
+        for pg in list(ctx.pages):
+            try: await pg.close()
+            except Exception: pass
+        await asyncio.sleep(0.3)
+
+        setup = await sw.evaluate("""async () => {
+          const winA = await chrome.windows.create({url: 'data:text/html,<title>A1</title>'});
+          const a1 = winA.tabs[0].id;
+          const a2 = (await chrome.tabs.create({windowId: winA.id, url: 'data:text/html,<title>A2</title>'})).id;
+          const a3 = (await chrome.tabs.create({windowId: winA.id, url: 'data:text/html,<title>A3</title>'})).id;
+          const winB = await chrome.windows.create({url: 'data:text/html,<title>B1</title>'});
+          const b1 = winB.tabs[0].id;
+          const b2 = (await chrome.tabs.create({windowId: winB.id, url: 'data:text/html,<title>B2</title>'})).id;
+          return {winA: winA.id, winB: winB.id, a1, a2, a3, b1, b2};
+        }""")
+        print(f"[multi-window] setup: {setup}")
+
+        # Activate in cross-window order so MRU is interleaved.
+        await sw.evaluate(f"""async () => {{
+          const s = {setup};
+          const seq = [
+            [s.winA, s.a1], [s.winB, s.b1], [s.winA, s.a2],
+            [s.winB, s.b2], [s.winA, s.a3]
+          ];
+          for (const [wid, tid] of seq) {{
+            await chrome.windows.update(wid, {{focused: true}});
+            await chrome.tabs.update(tid, {{active: true}});
+            await new Promise(r => setTimeout(r, 120));
+          }}
+        }}""")
+        await asyncio.sleep(0.4)
+
+        # User is now in winA on tab a3. Switching MRU should land on a2, not b2.
+        await sw.evaluate("globalThis.switchToMru()")
+        await asyncio.sleep(0.3)
+        active_a = await sw.evaluate(f"async () => (await chrome.tabs.query({{active: true, windowId: {setup['winA']}}}))[0]?.id")
+        active_b = await sw.evaluate(f"async () => (await chrome.tabs.query({{active: true, windowId: {setup['winB']}}}))[0]?.id")
+        print(f"[multi-window] after switchToMru in winA: winA active={active_a} (expect a2={setup['a2']}), winB active={active_b} (expect b2={setup['b2']})")
+        results.append(("switchToMru stays in source window", active_a == setup["a2"]))
+        results.append(("switchToMru does not disturb other window", active_b == setup["b2"]))
+
+        # Picker: should list only winA tabs (a1), not winB tabs.
+        await sw.evaluate(f"async () => {{ await chrome.windows.update({setup['winA']}, {{focused: true}}); }}")
+        await asyncio.sleep(0.2)
+        # Switch back to a3 first so picker source = winA, current = a3
+        await sw.evaluate(f"async () => chrome.tabs.update({setup['a3']}, {{active: true}})")
+        await asyncio.sleep(0.3)
+        await sw.evaluate("globalThis.openOrAdvancePicker()")
+        picker2 = None
+        for _ in range(40):
+            for pg in ctx.pages:
+                if pg.url.endswith("/picker.html"):
+                    picker2 = pg
+                    break
+            if picker2:
+                break
+            await asyncio.sleep(0.1)
+        if picker2:
+            await picker2.wait_for_function("globalThis.__pickerState && globalThis.__pickerState().tabs.length >= 0", timeout=3000)
+            pstate = await picker2.evaluate("globalThis.__pickerState()")
+            shown_titles = [t["title"] for t in pstate["tabs"]]
+            print(f"[multi-window] picker shows: {shown_titles}")
+            results.append(("picker excludes winB tabs", all(not t.startswith("B") for t in shown_titles)))
+            results.append(("picker includes winA tabs", any(t.startswith("A") for t in shown_titles)))
+            await sw.evaluate("globalThis.__closePickerForTest__ = true")
+            await sw.evaluate("(async () => { const id = (await chrome.storage.session.get('pickerWindowId')).pickerWindowId; if (id != null) await chrome.windows.remove(id); })()")
+        else:
+            results.append(("picker excludes winB tabs", False))
+            results.append(("picker includes winA tabs", False))
+
         await ctx.close()
 
     print()

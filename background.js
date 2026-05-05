@@ -23,18 +23,33 @@ async function removeTab(tabId) {
   await setStack(stack.filter((id) => id !== tabId));
 }
 
+async function getCurrentNormalWindow() {
+  const focused = await chrome.windows.getLastFocused();
+  if (focused && focused.type === 'normal') return focused;
+  const all = await chrome.windows.getAll();
+  return all.find((w) => w.type === 'normal') || focused;
+}
+
 async function switchToMru() {
-  let stack = await getStack();
-  while (stack.length >= 2) {
-    const targetId = stack[1];
+  const win = await getCurrentNormalWindow();
+  if (!win) return null;
+  const winId = win.id;
+  const stack = await getStack();
+
+  let skippedActive = false;
+  for (let i = 0; i < stack.length; i++) {
+    const targetId = stack[i];
     try {
       const tab = await chrome.tabs.get(targetId);
-      await chrome.windows.update(tab.windowId, { focused: true });
+      if (tab.windowId !== winId) continue;
+      if (!skippedActive) {
+        skippedActive = true;
+        continue;
+      }
       await chrome.tabs.update(targetId, { active: true });
       return targetId;
     } catch {
       await removeTab(targetId);
-      stack = await getStack();
     }
   }
   return null;
@@ -66,7 +81,11 @@ async function openOrAdvancePicker() {
     }
   }
 
-  await chrome.storage.session.set({ [ADVANCE_SEQ_KEY]: 0 });
+  const sourceWin = await getCurrentNormalWindow();
+  await chrome.storage.session.set({
+    [ADVANCE_SEQ_KEY]: 0,
+    pickerSourceWindowId: sourceWin ? sourceWin.id : null,
+  });
   const win = await chrome.windows.create({
     url: chrome.runtime.getURL('picker.html'),
     type: 'popup',
@@ -88,7 +107,13 @@ async function closePicker() {
 async function commitTab(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    await chrome.windows.update(tab.windowId, { focused: true });
+    // Stay within source window if the tab still lives there; otherwise also focus its window.
+    const { pickerSourceWindowId = null } = await chrome.storage.session.get('pickerSourceWindowId');
+    if (pickerSourceWindowId !== null && tab.windowId !== pickerSourceWindowId) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } else if (pickerSourceWindowId !== null) {
+      await chrome.windows.update(pickerSourceWindowId, { focused: true });
+    }
     await chrome.tabs.update(tabId, { active: true });
   } catch {
     await removeTab(tabId);

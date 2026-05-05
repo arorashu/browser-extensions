@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "MRU Tab Switcher",
+  "version": "1.0.0",
+  "description": "Switch to the most recently used tab with a keyboard shortcut, like Firefox's Ctrl+Tab MRU mode.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage"],
+  "commands": {
+    "switch-mru": {
+      "suggested_key": {
+        "default": "Ctrl+Period",
+        "mac": "MacCtrl+Period"
+      },
+      "description": "Switch to most recently used tab"
+    }
+  }
+}

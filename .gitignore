@@ -1,0 +1,4 @@
+.mru-test-profile/
+__pycache__/
+*.pyc
+.DS_Store

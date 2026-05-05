@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "MRU Tab Switcher",
+  "version": "1.1.0",
+  "description": "Switch to the most recently used tab, or open a picker to walk through recent tabs.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "tabs"],
+  "commands": {
+    "switch-mru": {
+      "suggested_key": {
+        "default": "Ctrl+Period",
+        "mac": "MacCtrl+Period"
+      },
+      "description": "Switch to most recently used tab (instant toggle)"
+    },
+    "open-picker": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Period",
+        "mac": "MacCtrl+Shift+Period"
+      },
+      "description": "Open recent-tabs picker"
+    }
+  }
+}

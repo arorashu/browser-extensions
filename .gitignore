@@ -1,0 +1,17 @@
+# Xcode
+*.xcuserstate
+xcuserdata/
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+
+# macOS
+.DS_Store
+
+# Python (test scripts)
+__pycache__/
+*.pyc
+
+# Test artifacts
+.mru-test-profile/

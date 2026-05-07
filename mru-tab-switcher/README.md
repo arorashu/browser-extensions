@@ -126,8 +126,23 @@ uv run --with playwright python scripts/test_mru.py --headed \
     --browser /Applications/Chromium.app/Contents/MacOS/Chromium
 ```
 
-15 assertions covering the toggle, picker open/walk/commit cycle, tab close
-recovery, and multi-window scoping.
+16 assertions covering the toggle, picker open/walk/commit cycle, tab close
+recovery, multi-window scoping, and thumbnail capture.
+
+A black-box Safari test is also available — drives real Safari via
+AppleScript (no Selenium, no safaridriver), simulating the actual key
+shortcuts and inspecting visible window state:
+
+```bash
+python scripts/test_mru_safari.py
+```
+
+It requires the extension to already be installed and enabled in Safari with
+Ctrl+1 / Ctrl+Q bound, and macOS Accessibility / Automation permission for
+the calling terminal. It opens a fresh Safari window with 4 tabs at a local
+http server, exercises the toggle and picker, and tears the window down at
+the end. Less comprehensive than the Chromium suite (no SW introspection)
+but useful as an integration smoke test against real Safari.
 
 ## Known gaps
 

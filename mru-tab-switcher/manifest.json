@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "MRU Tab Switcher",
-  "version": "1.1.0",
-  "description": "Switch to the most recently used tab, or open a picker to walk through recent tabs.",
+  "version": "1.2.0",
+  "description": "Switch to the most recently used tab, or open a picker to walk through recent tabs with thumbnails.",
   "background": {
     "service_worker": "background.js"
   },
   "permissions": ["storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
   "commands": {
     "switch-mru": {
       "suggested_key": {

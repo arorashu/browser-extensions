@@ -1,7 +1,12 @@
 const STACK_KEY = 'mruStack';
 const PICKER_WIN_KEY = 'pickerWindowId';
 const ADVANCE_SEQ_KEY = 'advanceSeq';
+const THUMBS_KEY = 'thumbs';
 const MAX_STACK = 50;
+const THUMB_W = 320;
+const THUMB_H = 200;
+const THUMB_QUALITY = 0.7;
+const CAPTURE_DEBOUNCE_MS = 300;
 const DEBUG = true;
 const NON_BROWSER_WINDOW_TYPES = new Set(['popup', 'panel', 'devtools', 'app']);
 
@@ -27,6 +32,70 @@ async function pushTab(tabId) {
 async function removeTab(tabId) {
   const stack = await getStack();
   await setStack(stack.filter((id) => id !== tabId));
+  await pruneThumb(tabId);
+}
+
+let captureTimer = null;
+let capturePending = null;
+
+function scheduleCapture(tabId, windowId) {
+  capturePending = { tabId, windowId };
+  if (captureTimer) clearTimeout(captureTimer);
+  captureTimer = setTimeout(runCapture, CAPTURE_DEBOUNCE_MS);
+}
+
+async function runCapture() {
+  const target = capturePending;
+  capturePending = null;
+  captureTimer = null;
+  if (!target) return;
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(target.windowId, {
+      format: 'jpeg',
+      quality: 60,
+    });
+    const small = await downscale(dataUrl);
+    const { [THUMBS_KEY]: thumbs = {} } = await chrome.storage.session.get(THUMBS_KEY);
+    thumbs[String(target.tabId)] = small;
+    await chrome.storage.session.set({ [THUMBS_KEY]: thumbs });
+    log('captured tab', target.tabId, '(' + Math.round(small.length / 1024) + 'KB stored)');
+  } catch (e) {
+    // Many failures are normal: chrome:// pages can't be captured, picker isn't visible, etc.
+    log('capture skipped for tab', target.tabId, e && e.message);
+  }
+}
+
+async function downscale(dataUrl) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bmp = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(THUMB_W, THUMB_H);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, THUMB_W, THUMB_H);
+  const ratio = Math.min(THUMB_W / bmp.width, THUMB_H / bmp.height);
+  const dw = bmp.width * ratio;
+  const dh = bmp.height * ratio;
+  ctx.drawImage(bmp, (THUMB_W - dw) / 2, (THUMB_H - dh) / 2, dw, dh);
+  const outBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: THUMB_QUALITY });
+  return await blobToDataUrl(outBlob);
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function pruneThumb(tabId) {
+  const { [THUMBS_KEY]: thumbs = {} } = await chrome.storage.session.get(THUMBS_KEY);
+  const key = String(tabId);
+  if (key in thumbs) {
+    delete thumbs[key];
+    await chrome.storage.session.set({ [THUMBS_KEY]: thumbs });
+  }
 }
 
 function isBrowserWindow(win) {
@@ -104,8 +173,8 @@ async function openOrAdvancePicker() {
   const win = await chrome.windows.create({
     url: chrome.runtime.getURL('picker.html'),
     type: 'popup',
-    width: 460,
-    height: 480,
+    width: 760,
+    height: 540,
     focused: true,
   });
   await setPickerWindowId(win.id);
@@ -140,6 +209,7 @@ globalThis.openOrAdvancePicker = openOrAdvancePicker;
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   log('onActivated', { tabId, windowId });
+  let isBrowser = true;
   try {
     const win = await chrome.windows.get(windowId);
     log('  window ->', { id: win.id, type: win.type });
@@ -151,12 +221,14 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
     // If we can't read the window (Safari sometimes denies this for popups),
     // be tolerant and still record the tab. The picker filter will sort it out.
     log('  windows.get failed, recording anyway:', e && e.message);
+    isBrowser = true;
   }
   await pushTab(tabId);
   if (DEBUG) {
     const stack = await getStack();
     log('  stack now', stack);
   }
+  if (isBrowser) scheduleCapture(tabId, windowId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {

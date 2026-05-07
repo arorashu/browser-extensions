@@ -13,6 +13,8 @@ import argparse
 import asyncio
 import shutil
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -20,7 +22,44 @@ from playwright.async_api import async_playwright
 EXT_DIR = Path(__file__).resolve().parent.parent
 PROFILE_DIR = EXT_DIR / ".mru-test-profile"
 
-URLS = [f"data:text/html,<title>Tab%20{i+1}</title><h1>Tab%20{i+1}</h1>" for i in range(5)]
+
+class _TabHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # /tab/N -> simple page titled "Tab N" with distinct background color
+        try:
+            n = int(self.path.rsplit("/", 1)[-1])
+        except ValueError:
+            n = 0
+        hue = (n * 67) % 360
+        body = (
+            f"<!doctype html><html><head><meta charset=utf-8>"
+            f"<title>Tab {n}</title>"
+            f"<style>body{{margin:0;height:100vh;display:flex;align-items:center;"
+            f"justify-content:center;font:48px/1 -apple-system,sans-serif;"
+            f"color:#fff;background:hsl({hue},70%,40%)}}</style></head>"
+            f"<body>Tab {n}</body></html>"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    def log_message(self, *args, **kwargs):
+        pass
+
+
+def _start_local_server():
+    """Spin up a localhost server returning real http URLs (captureVisibleTab
+    needs a real origin matched by host_permissions; data: URLs require
+    activeTab which isn't granted to background captures)."""
+    server = HTTPServer(("127.0.0.1", 0), _TabHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, server.server_address[1]
+
+
+_server, _port = _start_local_server()
+URLS = [f"http://127.0.0.1:{_port}/tab/{i + 1}" for i in range(5)]
 
 
 async def wait_for_service_worker(ctx, timeout_s=10):
@@ -117,6 +156,17 @@ async def main(headless: bool, executable_path: str | None = None):
         print(f"[ok] after closing idx-1 tab, active is now: index {after4}")
         # tab indices shift left after close; surviving pages are at indices 0..3
         results.append(("survives tab close (some tab is active)", after4 is not None))
+
+        # ---- Thumbnail capture ----
+        # Wait long enough for the debounced capture to land, then verify storage has thumbs.
+        await asyncio.sleep(0.6)
+        thumbs_count = await sw.evaluate(
+            "async () => Object.keys((await chrome.storage.session.get('thumbs')).thumbs || {}).length"
+        )
+        print(f"[thumbs] captured {thumbs_count} thumbnails after activations")
+        # We activated 5 tabs initially; some may be data: URLs that captureVisibleTab
+        # handles fine. Expect at least 2 thumbs to be present.
+        results.append(("thumbnails are captured on tab activation", thumbs_count >= 2))
 
         # ---- Picker tests ----
         print("\n[picker] reseating activation order for picker test")

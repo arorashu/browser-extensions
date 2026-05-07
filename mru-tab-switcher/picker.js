@@ -2,11 +2,14 @@ let tabs = [];
 let highlight = 0;
 let lastAdvanceSeq = 0;
 
+let thumbs = {};
+
 async function load() {
-  const { mruStack = [], advanceSeq = 0, pickerSourceWindowId = null } =
-    await chrome.storage.session.get(['mruStack', 'advanceSeq', 'pickerSourceWindowId']);
+  const { mruStack = [], advanceSeq = 0, pickerSourceWindowId = null, thumbs: storedThumbs = {} } =
+    await chrome.storage.session.get(['mruStack', 'advanceSeq', 'pickerSourceWindowId', 'thumbs']);
   lastAdvanceSeq = advanceSeq;
-  console.log('[picker] mruStack', mruStack, 'sourceWin', pickerSourceWindowId);
+  thumbs = storedThumbs;
+  console.log('[picker] mruStack', mruStack, 'sourceWin', pickerSourceWindowId, 'thumbs', Object.keys(thumbs).length);
   const resolved = await Promise.all(mruStack.map(async (id) => {
     try { return await chrome.tabs.get(id); } catch { return null; }
   }));
@@ -22,9 +25,15 @@ async function load() {
   render();
 }
 
-function makeFallback() {
+function makeFaviconFallback() {
   const div = document.createElement('div');
-  div.className = 'fallback';
+  div.className = 'favicon-fallback';
+  return div;
+}
+
+function makeThumbFallback() {
+  const div = document.createElement('div');
+  div.className = 'thumb-fallback';
   return div;
 }
 
@@ -39,42 +48,49 @@ function render() {
     return;
   }
   tabs.forEach((tab, i) => {
-    const div = document.createElement('div');
-    div.className = 'item' + (i === highlight ? ' active' : '');
-    div.dataset.index = String(i);
+    const card = document.createElement('div');
+    card.className = 'item' + (i === highlight ? ' active' : '');
+    card.dataset.index = String(i);
 
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'thumb-wrap';
+    const thumbUrl = thumbs[String(tab.id)];
+    if (thumbUrl) {
+      const img = document.createElement('img');
+      img.className = 'thumb';
+      img.src = thumbUrl;
+      img.onerror = () => img.replaceWith(makeThumbFallback());
+      thumbWrap.appendChild(img);
+    } else {
+      thumbWrap.appendChild(makeThumbFallback());
+    }
+    card.appendChild(thumbWrap);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
     if (tab.favIconUrl) {
       const img = document.createElement('img');
       img.className = 'favicon';
       img.src = tab.favIconUrl;
-      img.onerror = () => img.replaceWith(makeFallback());
-      div.appendChild(img);
+      img.onerror = () => img.replaceWith(makeFaviconFallback());
+      meta.appendChild(img);
     } else {
-      div.appendChild(makeFallback());
+      meta.appendChild(makeFaviconFallback());
     }
-
     const title = document.createElement('div');
     title.className = 'title';
     title.textContent = tab.title || tab.url || '(untitled)';
-    div.appendChild(title);
+    meta.appendChild(title);
+    card.appendChild(meta);
 
-    let host = '';
-    try { host = new URL(tab.url || '').host; } catch {}
-    if (host) {
-      const hostEl = document.createElement('div');
-      hostEl.className = 'host';
-      hostEl.textContent = host;
-      div.appendChild(hostEl);
-    }
-
-    div.addEventListener('click', () => commit(i));
-    div.addEventListener('mouseenter', () => {
+    card.addEventListener('click', () => commit(i));
+    card.addEventListener('mouseenter', () => {
       if (i !== highlight) {
         highlight = i;
         render();
       }
     });
-    list.appendChild(div);
+    list.appendChild(card);
   });
   list.querySelector('.item.active')?.scrollIntoView({ block: 'nearest' });
 }

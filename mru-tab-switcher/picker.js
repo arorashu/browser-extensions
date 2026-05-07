@@ -6,16 +6,18 @@ async function load() {
   const { mruStack = [], advanceSeq = 0, pickerSourceWindowId = null } =
     await chrome.storage.session.get(['mruStack', 'advanceSeq', 'pickerSourceWindowId']);
   lastAdvanceSeq = advanceSeq;
+  console.log('[picker] mruStack', mruStack, 'sourceWin', pickerSourceWindowId);
   const resolved = await Promise.all(mruStack.map(async (id) => {
     try { return await chrome.tabs.get(id); } catch { return null; }
   }));
-  // Keep only tabs that belong to the source window (Firefox-style window-scoped MRU).
-  // If we don't know the source window, fall back to listing every resolved tab.
+  console.log('[picker] resolved tabs', resolved.map((t) => t && {
+    id: t.id, windowId: t.windowId, title: t.title, url: t.url, favIconUrl: t.favIconUrl,
+  }));
   const inWindow = resolved.filter(
     (t) => t !== null && (pickerSourceWindowId === null || t.windowId === pickerSourceWindowId)
   );
-  // The first entry is the currently active tab in the source window — skip it.
   tabs = inWindow.slice(1);
+  console.log('[picker] showing', tabs.length, 'tabs');
   highlight = 0;
   render();
 }

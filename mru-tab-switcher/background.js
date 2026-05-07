@@ -2,6 +2,12 @@ const STACK_KEY = 'mruStack';
 const PICKER_WIN_KEY = 'pickerWindowId';
 const ADVANCE_SEQ_KEY = 'advanceSeq';
 const MAX_STACK = 50;
+const DEBUG = true;
+const NON_BROWSER_WINDOW_TYPES = new Set(['popup', 'panel', 'devtools', 'app']);
+
+function log(...args) {
+  if (DEBUG) console.log('[mru]', ...args);
+}
 
 async function getStack() {
   const { [STACK_KEY]: stack = [] } = await chrome.storage.session.get(STACK_KEY);
@@ -23,11 +29,20 @@ async function removeTab(tabId) {
   await setStack(stack.filter((id) => id !== tabId));
 }
 
+function isBrowserWindow(win) {
+  // Treat anything that isn't an explicitly-non-browser type as a regular browser window.
+  // Safari sometimes returns windows without `type === 'normal'`, so we exclude only
+  // known non-browser values rather than requiring 'normal' explicitly.
+  return win && !NON_BROWSER_WINDOW_TYPES.has(win.type);
+}
+
 async function getCurrentNormalWindow() {
   const focused = await chrome.windows.getLastFocused();
-  if (focused && focused.type === 'normal') return focused;
+  log('getLastFocused ->', focused && { id: focused.id, type: focused.type, focused: focused.focused });
+  if (isBrowserWindow(focused)) return focused;
   const all = await chrome.windows.getAll();
-  return all.find((w) => w.type === 'normal') || focused;
+  log('windows.getAll types ->', all.map((w) => ({ id: w.id, type: w.type })));
+  return all.find(isBrowserWindow) || focused;
 }
 
 async function switchToMru() {
@@ -124,13 +139,24 @@ globalThis.switchToMru = switchToMru;
 globalThis.openOrAdvancePicker = openOrAdvancePicker;
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  log('onActivated', { tabId, windowId });
   try {
     const win = await chrome.windows.get(windowId);
-    if (win.type !== 'normal') return;
-  } catch {
-    return;
+    log('  window ->', { id: win.id, type: win.type });
+    if (!isBrowserWindow(win)) {
+      log('  skipping non-browser window');
+      return;
+    }
+  } catch (e) {
+    // If we can't read the window (Safari sometimes denies this for popups),
+    // be tolerant and still record the tab. The picker filter will sort it out.
+    log('  windows.get failed, recording anyway:', e && e.message);
   }
-  pushTab(tabId);
+  await pushTab(tabId);
+  if (DEBUG) {
+    const stack = await getStack();
+    log('  stack now', stack);
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
